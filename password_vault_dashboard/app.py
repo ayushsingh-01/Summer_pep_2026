@@ -83,6 +83,14 @@ def encrypt_credential(plain_text: str) -> tuple[str, str]:
     return encrypted_password, fingerprint
 
 
+def decrypt_credential(encrypted_text: str) -> str:
+    fernet = get_fernet_key()
+    if fernet is None:
+        raise ValueError("Set APP_ENCRYPTION_KEY in your .env before viewing credentials.")
+
+    return fernet.decrypt(encrypted_text.encode("utf-8")).decode("utf-8")
+
+
 def save_credential(
     _engine,
     *,
@@ -156,6 +164,66 @@ def save_credential(
         return int(result.scalar_one())
 
 
+def update_credential(
+    _engine,
+    *,
+    password_entry_id: int,
+    vault_id: int,
+    category_id: int | None,
+    created_by_user_id: int,
+    website_name: str,
+    username: str,
+    password: str,
+    url: str | None,
+    notes: str | None,
+    password_strength: str,
+    expires_at,
+    is_favorite: bool,
+) -> None:
+    encrypted_password, fingerprint = encrypt_credential(password)
+    update_sql = text(
+        """
+        UPDATE password_vault.password_entries
+        SET
+            vault_id = :vault_id,
+            category_id = :category_id,
+            created_by_user_id = :created_by_user_id,
+            website_name = :website_name,
+            username = :username,
+            encrypted_password = :encrypted_password,
+            password_fingerprint = :password_fingerprint,
+            url = :url,
+            notes = :notes,
+            password_strength = :password_strength,
+            expires_at = :expires_at,
+            last_rotated_at = NOW(),
+            is_favorite = :is_favorite
+        WHERE password_entry_id = :password_entry_id
+          AND created_by_user_id = :created_by_user_id
+        """
+    )
+
+    with _engine.begin() as connection:
+        connection.execute(
+            update_sql,
+            {
+                "password_entry_id": password_entry_id,
+                "vault_id": vault_id,
+                "category_id": category_id,
+                "created_by_user_id": created_by_user_id,
+                "website_name": website_name,
+                "username": username,
+                "encrypted_password": encrypted_password,
+                "password_fingerprint": fingerprint,
+                "url": url or None,
+                "notes": notes or None,
+                "password_strength": password_strength,
+                "expires_at": expires_at,
+                "is_favorite": is_favorite,
+            },
+        )
+
+
 def delete_credential(_engine, *, password_entry_id: int, created_by_user_id: int) -> None:
     delete_sql = text(
         """
@@ -215,9 +283,14 @@ def load_credentials(_engine, user_id: int) -> pd.DataFrame:
         """
         SELECT
             pe.password_entry_id,
+            pe.vault_id,
+            pe.category_id,
+            pe.created_by_user_id,
             pe.website_name,
             pe.username,
+            pe.encrypted_password,
             pe.url,
+            pe.notes,
             pe.password_strength,
             pe.is_favorite,
             pe.created_at,
@@ -480,7 +553,8 @@ with credentials_tab:
                 category_label = st.selectbox("Category", category_options)
                 website_name = st.text_input("Website / service name")
                 credential_username = st.text_input("Username / email")
-                credential_password = st.text_input("Password", type="password")
+                show_add_password = st.checkbox("Show password while typing", key="show_add_password")
+                credential_password = st.text_input("Password", type="default" if show_add_password else "password")
                 url = st.text_input("URL", placeholder="https://example.com")
                 notes = st.text_area("Notes", height=100)
                 has_expiry = st.checkbox("Set expiry date")
@@ -525,6 +599,95 @@ with credentials_tab:
                         st.error(str(e))
                     except Exception as e:
                         st.exception(e)
+
+    st.markdown("---")
+    st.markdown("#### Edit credential")
+    if credentials_df.empty:
+        st.info("No credentials are available to edit for this user.")
+    else:
+        editable_map = {
+            f"{row.website_name} | {row.username} | {row.vault_name} | {row.password_entry_id}": int(row.password_entry_id)
+            for row in credentials_df.itertuples(index=False)
+        }
+        selected_edit_label = st.selectbox("Credential to edit", list(editable_map.keys()), key="edit_credential_select")
+        selected_row = credentials_df.loc[credentials_df["password_entry_id"] == editable_map[selected_edit_label]].iloc[0]
+
+        selected_vault_id = int(selected_row["vault_id"])
+        selected_category_id = None if pd.isna(selected_row["category_id"]) else int(selected_row["category_id"])
+        try:
+            current_password = decrypt_credential(str(selected_row["encrypted_password"]))
+        except InvalidToken:
+            current_password = ""
+            st.warning("The current password could not be decrypted with the active key. You can still overwrite it with a new password.")
+
+        edit_vault_options = {
+            f"{row.vault_name} ({row.vault_type})": int(row.vault_id)
+            for row in vaults_df.itertuples(index=False)
+        }
+        edit_category_options = ["(none)"] + [row.category_name for row in categories_df.itertuples(index=False)]
+        default_vault_label = next((label for label, vault_id in edit_vault_options.items() if vault_id == selected_vault_id), list(edit_vault_options.keys())[0])
+        default_category_label = "(none)"
+        if selected_category_id is not None:
+            category_match = categories_df.loc[categories_df["category_id"] == selected_category_id, "category_name"]
+            if not category_match.empty:
+                default_category_label = str(category_match.iloc[0])
+
+        with st.form("edit_credential_form"):
+            edit_vault_label = st.selectbox("Vault", list(edit_vault_options.keys()), index=list(edit_vault_options.keys()).index(default_vault_label), key="edit_vault")
+            edit_category_label = st.selectbox("Category", edit_category_options, index=edit_category_options.index(default_category_label), key="edit_category")
+            edit_website_name = st.text_input("Website / service name", value=str(selected_row["website_name"]))
+            edit_credential_username = st.text_input("Username / email", value=str(selected_row["username"]))
+            show_edit_password = st.checkbox("Show password while typing", key="show_edit_password")
+            edit_credential_password = st.text_input("Password", value=current_password, type="default" if show_edit_password else "password")
+            edit_url = st.text_input("URL", value="" if pd.isna(selected_row["url"]) else str(selected_row["url"]))
+            edit_notes = st.text_area("Notes", value="" if pd.isna(selected_row["notes"]) else str(selected_row["notes"]), height=100)
+            edit_is_favorite = st.checkbox("Mark as favorite", value=bool(selected_row["is_favorite"]))
+            edit_has_expiry = st.checkbox("Set expiry date", value=not pd.isna(selected_row["expires_at"]))
+            if edit_has_expiry and not pd.isna(selected_row["expires_at"]):
+                expiry_value = pd.Timestamp(selected_row["expires_at"]).date()
+            else:
+                expiry_value = pd.Timestamp.now().date()
+            edit_expiry_date = st.date_input("Expiry date", value=expiry_value, disabled=not edit_has_expiry)
+            submit_edit = st.form_submit_button("Save changes")
+
+        if submit_edit:
+            if not edit_website_name or not edit_credential_username or not edit_credential_password:
+                st.error("Website, username, and password are required.")
+            else:
+                try:
+                    strength_df = fetch_dataframe(
+                        engine,
+                        "SELECT password_vault.fn_password_strength_estimate(:plain_password) AS strength",
+                        {"plain_password": edit_credential_password},
+                    )
+                    password_strength = str(strength_df.iloc[0]["strength"])
+                    edit_category_id = None
+                    if edit_category_label != "(none)":
+                        edit_category_id = int(categories_df.loc[categories_df["category_name"] == edit_category_label, "category_id"].iloc[0])
+
+                    update_credential(
+                        engine,
+                        password_entry_id=int(selected_row["password_entry_id"]),
+                        vault_id=edit_vault_options[edit_vault_label],
+                        category_id=edit_category_id,
+                        created_by_user_id=selected_user_id,
+                        website_name=edit_website_name.strip(),
+                        username=edit_credential_username.strip(),
+                        password=edit_credential_password,
+                        url=edit_url.strip() or None,
+                        notes=edit_notes.strip() or None,
+                        password_strength=password_strength,
+                        expires_at=pd.Timestamp(edit_expiry_date).to_pydatetime() if edit_has_expiry else None,
+                        is_favorite=edit_is_favorite,
+                    )
+                    fetch_dataframe.clear()
+                    run_query.clear()
+                    st.success("Credential updated.")
+                    st.rerun()
+                except (ValueError, InvalidToken) as e:
+                    st.error(str(e))
+                except Exception as e:
+                    st.exception(e)
 
     with right_col:
         st.markdown("#### Delete credential")
