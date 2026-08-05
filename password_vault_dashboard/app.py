@@ -715,5 +715,25 @@ with credentials_tab:
                 except Exception as e:
                     st.exception(e)
 
+        st.markdown("#### View saved password")
+        if credentials_df.empty:
+            st.info("No credentials were found for this user.")
+        else:
+            view_map = {
+                f"{row.website_name} | {row.username} | {row.vault_name} | {row.password_entry_id}": int(row.password_entry_id)
+                for row in credentials_df.itertuples(index=False)
+            }
+            selected_view_label = st.selectbox("Credential to reveal", list(view_map.keys()), key="view_credential_select")
+            reveal_password = st.checkbox("Reveal decrypted password", key="reveal_saved_password")
+
+            if reveal_password:
+                selected_view_row = credentials_df.loc[credentials_df["password_entry_id"] == view_map[selected_view_label]].iloc[0]
+                try:
+                    decrypted_password = decrypt_credential(str(selected_view_row["encrypted_password"]))
+                    st.code(decrypted_password, language="text")
+                    st.caption("Use this only for credentials you own or are authorized to inspect.")
+                except InvalidToken:
+                    st.error("This password could not be decrypted with the active key.")
+
         st.markdown("#### Your credentials")
         st.dataframe(credentials_df, use_container_width=True, hide_index=True)
