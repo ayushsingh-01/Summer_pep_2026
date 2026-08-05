@@ -346,6 +346,207 @@ def load_credentials(_engine, user_id: int) -> pd.DataFrame:
     )
 
 
+def render_analytics_visuals(selected: str, df: pd.DataFrame, _engine) -> None:
+    if df.empty:
+        st.info("No rows returned for this report.")
+        return
+
+    if selected == "User Security Summary":
+        summary_cols = st.columns(4)
+        summary_cols[0].metric("Average score", f"{df['security_score'].mean():.1f}")
+        summary_cols[1].metric("MFA enabled", f"{int(df['mfa_enabled'].sum())}/{len(df)}")
+        summary_cols[2].metric("Open alerts", f"{int(df['open_alert_count'].sum())}")
+        summary_cols[3].metric("Strong passwords", f"{int(df['strong_password_count'].sum())}")
+
+        chart_cols = st.columns(2)
+        with chart_cols[0]:
+            fig = px.bar(
+                df.sort_values("security_score", ascending=True),
+                x="security_score",
+                y="username",
+                orientation="h",
+                color="mfa_enabled",
+                color_discrete_map={True: "#2E86AB", False: "#D1495B"},
+                title="Security score by user",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        with chart_cols[1]:
+            scatter_fig = px.scatter(
+                df,
+                x="password_count",
+                y="open_alert_count",
+                size="active_shared_password_count",
+                color="security_score",
+                hover_name="username",
+                size_max=35,
+                title="Password volume vs open alerts",
+            )
+            st.plotly_chart(scatter_fig, use_container_width=True)
+
+    elif selected == "Password Health":
+        summary_cols = st.columns(4)
+        row = df.iloc[0]
+        summary_cols[0].metric("Total passwords", f"{int(row['total_passwords'])}")
+        summary_cols[1].metric("Weak / medium", f"{int(row['weak_passwords'] + row['medium_passwords'])}")
+        summary_cols[2].metric("Average age", f"{row['average_password_age_days']:.1f} days")
+        summary_cols[3].metric("Not strong", f"{row['percentage_not_strong']:.1f}%")
+
+        strength_df = fetch_dataframe(
+            _engine,
+            """
+            SELECT
+                password_strength,
+                COUNT(*) AS password_count
+            FROM password_vault.password_entries
+            GROUP BY password_strength
+            ORDER BY password_count DESC;
+            """,
+        )
+        age_df = fetch_dataframe(
+            _engine,
+            """
+            SELECT
+                password_strength,
+                EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0 AS age_days
+            FROM password_vault.password_entries;
+            """,
+        )
+
+        chart_cols = st.columns(2)
+        with chart_cols[0]:
+            fig = px.pie(
+                strength_df,
+                names="password_strength",
+                values="password_count",
+                hole=0.45,
+                title="Password strength mix",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        with chart_cols[1]:
+            hist = px.histogram(
+                age_df,
+                x="age_days",
+                color="password_strength",
+                nbins=20,
+                title="Password age distribution",
+            )
+            st.plotly_chart(hist, use_container_width=True)
+
+    elif selected == "Vault Summary":
+        summary_cols = st.columns(3)
+        summary_cols[0].metric("Vaults", f"{len(df)}")
+        summary_cols[1].metric("Passwords", f"{int(df['password_count'].sum())}")
+        summary_cols[2].metric("Avg age", f"{df['average_password_age_days'].mean():.1f} days")
+
+        chart_cols = st.columns(2)
+        with chart_cols[0]:
+            fig = px.bar(
+                df.sort_values("password_count", ascending=False),
+                x="vault_name",
+                y="password_count",
+                color="vault_type",
+                title="Passwords per vault",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        with chart_cols[1]:
+            treemap = px.treemap(
+                df,
+                path=["vault_type", "owner_username", "vault_name"],
+                values="password_count",
+                color="category_count",
+                title="Vault composition",
+            )
+            st.plotly_chart(treemap, use_container_width=True)
+
+    elif selected == "Login Activity":
+        summary_cols = st.columns(4)
+        summary_cols[0].metric("Login rows", f"{len(df)}")
+        summary_cols[1].metric("Successful logins", f"{int(df['successful_logins'].sum())}")
+        summary_cols[2].metric("Failed logins", f"{int(df['failed_logins'].sum())}")
+        summary_cols[3].metric("Avg success rate", f"{df['success_rate'].mean():.1f}%")
+
+        trend_df = df.groupby("login_day", as_index=False)[["total_logins", "successful_logins", "failed_logins"]].sum()
+        user_success_df = df.groupby("username", as_index=False)["success_rate"].mean().sort_values("success_rate", ascending=False)
+        heatmap_df = fetch_dataframe(
+            _engine,
+            """
+            SELECT
+                EXTRACT(DOW FROM login_time) AS day_of_week,
+                EXTRACT(HOUR FROM login_time) AS hour_of_day,
+                COUNT(*) AS login_count
+            FROM password_vault.login_sessions
+            GROUP BY EXTRACT(DOW FROM login_time), EXTRACT(HOUR FROM login_time)
+            ORDER BY day_of_week, hour_of_day;
+            """,
+        )
+
+        chart_cols = st.columns(2)
+        with chart_cols[0]:
+            line_fig = px.line(
+                trend_df,
+                x="login_day",
+                y=["total_logins", "successful_logins", "failed_logins"],
+                markers=True,
+                title="Login trend over time",
+            )
+            st.plotly_chart(line_fig, use_container_width=True)
+
+        with chart_cols[1]:
+            bar_fig = px.bar(user_success_df, x="username", y="success_rate", color="username", title="Average success rate by user")
+            st.plotly_chart(bar_fig, use_container_width=True)
+
+        heatmap = px.density_heatmap(
+            heatmap_df,
+            x="hour_of_day",
+            y="day_of_week",
+            z="login_count",
+            nbinsx=24,
+            nbinsy=7,
+            color_continuous_scale="Blues",
+            title="Login hot spots by day and hour",
+        )
+        st.plotly_chart(heatmap, use_container_width=True)
+
+    elif selected == "Risk Ranking":
+        summary_cols = st.columns(4)
+        summary_cols[0].metric("Top risk", f"{df['risk_score'].max():.0f}")
+        summary_cols[1].metric("Average risk", f"{df['risk_score'].mean():.1f}")
+        summary_cols[2].metric("High-risk users", f"{int((df['risk_score'] >= 40).sum())}")
+        summary_cols[3].metric("Low-risk users", f"{int((df['risk_score'] < 20).sum())}")
+
+        chart_cols = st.columns(2)
+        with chart_cols[0]:
+            bar_fig = px.bar(
+                df.sort_values("risk_score", ascending=True),
+                x="risk_score",
+                y="username",
+                orientation="h",
+                color="risk_score",
+                title="Risk score leaderboard",
+            )
+            st.plotly_chart(bar_fig, use_container_width=True)
+
+        with chart_cols[1]:
+            bubble = px.scatter(
+                df,
+                x="weak_password_count",
+                y="failed_login_count",
+                size="expired_password_count",
+                color="no_mfa_flag",
+                hover_name="username",
+                size_max=40,
+                title="Risk drivers by user",
+            )
+            st.plotly_chart(bubble, use_container_width=True)
+
+        if "risk_rank" in df.columns:
+            rank_fig = px.bar(df.sort_values("risk_rank"), x="username", y="risk_rank", color="risk_rank", title="Risk rank order")
+            st.plotly_chart(rank_fig, use_container_width=True)
+
+
 QUERY_SPECS = {
     "User Security Summary": {
         "relation": "password_vault.vw_user_security_summary",
@@ -542,15 +743,9 @@ with analytics_tab:
     sql = query_spec["sql"] if relation_exists(engine, query_spec["relation"]) else query_spec["fallback_sql"]
     try:
         df = run_query(engine, sql)
-        st.write(df)
-
-        if selected == "User Security Summary":
-            fig = px.bar(df, x="username", y="security_score", color="username", text="security_score")
-            st.plotly_chart(fig, use_container_width=True)
-
-        if selected == "Password Health" and "risk_score" in df.columns:
-            fig = px.histogram(df, x="risk_score", nbins=20, title="Password risk score distribution")
-            st.plotly_chart(fig, use_container_width=True)
+        render_analytics_visuals(selected, df, engine)
+        st.markdown("#### Raw data")
+        st.dataframe(df, use_container_width=True, hide_index=True)
 
     except Exception as e:
         st.error(
