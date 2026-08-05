@@ -840,17 +840,15 @@ REQUIRED_TABLES = [
 
 database_url = resolve_database_url()
 
-st.sidebar.header("Connection")
-st.sidebar.caption("The dashboard connects automatically from `DATABASE_URL` or the `POSTGRES_*` variables in `.env`.")
-st.sidebar.code(database_url.replace(os.getenv("POSTGRES_PASSWORD", "pgpass"), "***"), language="text")
+st.sidebar.header("Status")
 
 try:
     engine = get_engine_cached(database_url)
     with engine.connect() as connection:
         connection.exec_driver_sql("SELECT 1")
-    st.sidebar.success("Connected")
+    st.sidebar.success("Database connected")
 except Exception as e:
-    st.sidebar.error(f"Connection failed: {e}")
+    st.sidebar.error("Database connection failed")
     st.stop()
 
 
