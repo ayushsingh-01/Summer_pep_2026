@@ -1,10 +1,13 @@
 import os
+import hashlib
+import base64
 from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 from dotenv import load_dotenv
+from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import text
 
 from utils.db import get_engine
@@ -54,6 +57,181 @@ def relation_exists(_engine, relation_name: str) -> bool:
             {"relation_name": relation_name},
         )
         return bool(result.scalar_one())
+
+
+@st.cache_data(ttl=30)
+def fetch_dataframe(_engine, sql: str, params: dict | None = None) -> pd.DataFrame:
+    return pd.read_sql(text(sql), _engine, params=params or {})
+
+
+@st.cache_resource
+def get_fernet_key() -> Fernet | None:
+    key = os.getenv("APP_ENCRYPTION_KEY", "").strip()
+    if not key:
+        derived_seed = resolve_database_url().encode("utf-8")
+        key = base64.urlsafe_b64encode(hashlib.sha256(derived_seed).digest()).decode("utf-8")
+    return Fernet(key.encode("utf-8"))
+
+
+def encrypt_credential(plain_text: str) -> tuple[str, str]:
+    fernet = get_fernet_key()
+    if fernet is None:
+        raise ValueError("Set APP_ENCRYPTION_KEY in your .env before adding credentials.")
+
+    encrypted_password = fernet.encrypt(plain_text.encode("utf-8")).decode("utf-8")
+    fingerprint = hashlib.sha256(plain_text.encode("utf-8")).hexdigest()
+    return encrypted_password, fingerprint
+
+
+def save_credential(
+    _engine,
+    *,
+    vault_id: int,
+    category_id: int | None,
+    created_by_user_id: int,
+    website_name: str,
+    username: str,
+    password: str,
+    url: str | None,
+    notes: str | None,
+    password_strength: str,
+    expires_at,
+    is_favorite: bool,
+) -> int:
+    encrypted_password, fingerprint = encrypt_credential(password)
+    insert_sql = text(
+        """
+        INSERT INTO password_vault.password_entries (
+            vault_id,
+            category_id,
+            created_by_user_id,
+            website_name,
+            username,
+            encrypted_password,
+            password_fingerprint,
+            url,
+            notes,
+            password_strength,
+            expires_at,
+            last_rotated_at,
+            is_favorite
+        )
+        VALUES (
+            :vault_id,
+            :category_id,
+            :created_by_user_id,
+            :website_name,
+            :username,
+            :encrypted_password,
+            :password_fingerprint,
+            :url,
+            :notes,
+            :password_strength,
+            :expires_at,
+            NOW(),
+            :is_favorite
+        )
+        RETURNING password_entry_id
+        """
+    )
+
+    with _engine.begin() as connection:
+        result = connection.execute(
+            insert_sql,
+            {
+                "vault_id": vault_id,
+                "category_id": category_id,
+                "created_by_user_id": created_by_user_id,
+                "website_name": website_name,
+                "username": username,
+                "encrypted_password": encrypted_password,
+                "password_fingerprint": fingerprint,
+                "url": url or None,
+                "notes": notes or None,
+                "password_strength": password_strength,
+                "expires_at": expires_at,
+                "is_favorite": is_favorite,
+            },
+        )
+        return int(result.scalar_one())
+
+
+def delete_credential(_engine, *, password_entry_id: int, created_by_user_id: int) -> None:
+    delete_sql = text(
+        """
+        DELETE FROM password_vault.password_entries
+        WHERE password_entry_id = :password_entry_id
+          AND created_by_user_id = :created_by_user_id
+        """
+    )
+    with _engine.begin() as connection:
+        connection.execute(
+            delete_sql,
+            {
+                "password_entry_id": password_entry_id,
+                "created_by_user_id": created_by_user_id,
+            },
+        )
+
+
+def load_users(_engine) -> pd.DataFrame:
+    return fetch_dataframe(
+        _engine,
+        """
+        SELECT user_id, username, email
+        FROM password_vault.users
+        ORDER BY username;
+        """,
+    )
+
+
+def load_vaults(_engine, user_id: int) -> pd.DataFrame:
+    return fetch_dataframe(
+        _engine,
+        """
+        SELECT vault_id, vault_name, vault_type
+        FROM password_vault.vaults
+        WHERE owner_user_id = :user_id
+        ORDER BY vault_name;
+        """,
+        {"user_id": user_id},
+    )
+
+
+def load_categories(_engine) -> pd.DataFrame:
+    return fetch_dataframe(
+        _engine,
+        """
+        SELECT category_id, category_name
+        FROM password_vault.categories
+        ORDER BY category_name;
+        """,
+    )
+
+
+def load_credentials(_engine, user_id: int) -> pd.DataFrame:
+    return fetch_dataframe(
+        _engine,
+        """
+        SELECT
+            pe.password_entry_id,
+            pe.website_name,
+            pe.username,
+            pe.url,
+            pe.password_strength,
+            pe.is_favorite,
+            pe.created_at,
+            pe.expires_at,
+            v.vault_name,
+            c.category_name
+        FROM password_vault.password_entries pe
+        JOIN password_vault.vaults v ON v.vault_id = pe.vault_id
+        LEFT JOIN password_vault.categories c ON c.category_id = pe.category_id
+        WHERE pe.created_by_user_id = :user_id
+        ORDER BY pe.created_at DESC, pe.password_entry_id DESC;
+        """,
+        {"user_id": user_id},
+    )
 
 
 QUERY_SPECS = {
@@ -237,27 +415,142 @@ if missing_relations:
         "If the database is empty, run `password_vault_sql/00_setup.sql` on that database first."
     )
 
+users_df = load_users(engine)
+if users_df.empty:
+    st.warning("No users were found in this database. Initialize the schema and seed data first.")
+    st.stop()
 
-selected = st.selectbox("View", list(QUERY_SPECS.keys()))
-st.markdown("---")
+analytics_tab, credentials_tab = st.tabs(["Analytics", "Credentials"])
 
-query_spec = QUERY_SPECS[selected]
-sql = query_spec["sql"] if relation_exists(engine, query_spec["relation"]) else query_spec["fallback_sql"]
-try:
-    df = run_query(engine, sql)
-    st.write(df)
+with analytics_tab:
+    selected = st.selectbox("View", list(QUERY_SPECS.keys()))
+    st.markdown("---")
 
-    if selected == "User Security Summary":
-        fig = px.bar(df, x="username", y="security_score", color="username", text="security_score")
-        st.plotly_chart(fig, use_container_width=True)
+    query_spec = QUERY_SPECS[selected]
+    sql = query_spec["sql"] if relation_exists(engine, query_spec["relation"]) else query_spec["fallback_sql"]
+    try:
+        df = run_query(engine, sql)
+        st.write(df)
 
-    if selected == "Password Health" and "risk_score" in df.columns:
-        fig = px.histogram(df, x="risk_score", nbins=20, title="Password risk score distribution")
-        st.plotly_chart(fig, use_container_width=True)
+        if selected == "User Security Summary":
+            fig = px.bar(df, x="username", y="security_score", color="username", text="security_score")
+            st.plotly_chart(fig, use_container_width=True)
 
-except Exception as e:
-    st.error(
-        "Query failed. If this database is a fresh hosted instance, initialize it first by running "
-        "`password_vault_sql/00_setup.sql` against the same database URL."
-    )
-    st.exception(e)
+        if selected == "Password Health" and "risk_score" in df.columns:
+            fig = px.histogram(df, x="risk_score", nbins=20, title="Password risk score distribution")
+            st.plotly_chart(fig, use_container_width=True)
+
+    except Exception as e:
+        st.error(
+            "Query failed. If this database is a fresh hosted instance, initialize it first by running "
+            "`password_vault_sql/00_setup.sql` against the same database URL."
+        )
+        st.exception(e)
+
+with credentials_tab:
+    st.subheader("Add or remove your own credentials")
+    st.caption("Choose a user, then create or delete credentials in that user's vaults.")
+
+    user_labels = {f"{row.username} ({row.email})": int(row.user_id) for row in users_df.itertuples(index=False)}
+    selected_user_label = st.selectbox("Credential owner", list(user_labels.keys()))
+    selected_user_id = user_labels[selected_user_label]
+
+    vaults_df = load_vaults(engine, selected_user_id)
+    categories_df = load_categories(engine)
+    credentials_df = load_credentials(engine, selected_user_id)
+
+    left_col, right_col = st.columns(2)
+
+    with left_col:
+        st.markdown("#### Add credential")
+        if vaults_df.empty:
+            st.info("This user has no vaults yet. Create a vault in the database before adding a credential.")
+        else:
+            if os.getenv("APP_ENCRYPTION_KEY", "").strip() == "":
+                st.info("Using a key derived from `DATABASE_URL` for credential encryption. Set `APP_ENCRYPTION_KEY` if you want a dedicated key.")
+
+            with st.form("add_credential_form", clear_on_submit=True):
+                vault_label_map = {
+                    f"{row.vault_name} ({row.vault_type})": int(row.vault_id)
+                    for row in vaults_df.itertuples(index=False)
+                }
+                category_options = ["(none)"] + [row.category_name for row in categories_df.itertuples(index=False)]
+
+                vault_label = st.selectbox("Vault", list(vault_label_map.keys()))
+                category_label = st.selectbox("Category", category_options)
+                website_name = st.text_input("Website / service name")
+                credential_username = st.text_input("Username / email")
+                credential_password = st.text_input("Password", type="password")
+                url = st.text_input("URL", placeholder="https://example.com")
+                notes = st.text_area("Notes", height=100)
+                has_expiry = st.checkbox("Set expiry date")
+                expiry_date = st.date_input("Expiry date", disabled=not has_expiry)
+                is_favorite = st.checkbox("Mark as favorite")
+                submit_add = st.form_submit_button("Save credential")
+
+            if submit_add:
+                if not website_name or not credential_username or not credential_password:
+                    st.error("Website, username, and password are required.")
+                else:
+                    try:
+                        strength_df = fetch_dataframe(
+                            engine,
+                            "SELECT password_vault.fn_password_strength_estimate(:plain_password) AS strength",
+                            {"plain_password": credential_password},
+                        )
+                        password_strength = str(strength_df.iloc[0]["strength"])
+                        category_id = None
+                        if category_label != "(none)":
+                            category_id = int(categories_df.loc[categories_df["category_name"] == category_label, "category_id"].iloc[0])
+
+                        inserted_id = save_credential(
+                            engine,
+                            vault_id=vault_label_map[vault_label],
+                            category_id=category_id,
+                            created_by_user_id=selected_user_id,
+                            website_name=website_name.strip(),
+                            username=credential_username.strip(),
+                            password=credential_password,
+                            url=url.strip() or None,
+                            notes=notes.strip() or None,
+                            password_strength=password_strength,
+                            expires_at=pd.Timestamp(expiry_date).to_pydatetime() if has_expiry else None,
+                            is_favorite=is_favorite,
+                        )
+                        fetch_dataframe.clear()
+                        run_query.clear()
+                        st.success(f"Credential saved with ID {inserted_id}.")
+                        st.rerun()
+                    except (ValueError, InvalidToken) as e:
+                        st.error(str(e))
+                    except Exception as e:
+                        st.exception(e)
+
+    with right_col:
+        st.markdown("#### Delete credential")
+        if credentials_df.empty:
+            st.info("No credentials were found for this user.")
+        else:
+            credential_map = {
+                f"{row.website_name} | {row.username} | {row.vault_name} | {row.password_entry_id}": int(row.password_entry_id)
+                for row in credentials_df.itertuples(index=False)
+            }
+            selected_credential_label = st.selectbox("Credential to delete", list(credential_map.keys()))
+            confirm_delete = st.checkbox("I understand this will permanently delete the credential")
+
+            if st.button("Delete selected credential", type="primary", disabled=not confirm_delete):
+                try:
+                    delete_credential(
+                        engine,
+                        password_entry_id=credential_map[selected_credential_label],
+                        created_by_user_id=selected_user_id,
+                    )
+                    fetch_dataframe.clear()
+                    run_query.clear()
+                    st.success("Credential deleted.")
+                    st.rerun()
+                except Exception as e:
+                    st.exception(e)
+
+        st.markdown("#### Your credentials")
+        st.dataframe(credentials_df, use_container_width=True, hide_index=True)
