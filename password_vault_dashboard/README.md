@@ -7,6 +7,7 @@ Streamlit dashboard that auto-connects to Postgres using `DATABASE_URL` first, t
 - No more manual Connect button.
 - The app connects as soon as it starts.
 - It works with a hosted Postgres instance once you set the environment variables.
+- If the hosted database is empty, the app will warn you and tell you to run the SQL setup files first.
 
 ## Setup
 
@@ -34,6 +35,8 @@ POSTGRES_DB=password_vault
 
 For an online database, create a hosted Postgres instance on a service like Neon, Supabase, or Render, then paste its connection string into `DATABASE_URL`.
 
+If that database is brand new, run `password_vault_sql/00_setup.sql` against the same database once so the schema, views, seed data, and analytics objects are created.
+
 ## Run
 
 ```bash
@@ -46,3 +49,4 @@ streamlit run password_vault_dashboard/app.py
 2. Start the app with the command above.
 3. If you change the database, restart Streamlit so it reloads the env vars.
 4. If you want to deploy online, move the app to Streamlit Community Cloud or another host and set the same env vars there.
+5. If the dashboard shows a missing-view warning, initialize the database with `password_vault_sql/00_setup.sql` before trying again.

@@ -17,9 +17,24 @@ else:
 print('Connecting to', url)
 engine = create_engine(url)
 with engine.connect() as conn:
-    r = conn.execute(text(
-        "select user_id, username, security_score from password_vault.vw_user_security_summary order by security_score desc"
-    ))
+    relation_exists = conn.execute(
+        text("SELECT to_regclass(:relation_name) IS NOT NULL"),
+        {"relation_name": "password_vault.vw_user_security_summary"},
+    ).scalar_one()
+
+    if relation_exists:
+        sql = "select user_id, username, security_score from password_vault.vw_user_security_summary order by security_score desc"
+    else:
+        sql = """
+            select
+                u.user_id,
+                u.username,
+                round(greatest(0, 100 + case when u.mfa_enabled then 12 else 0 end + case when u.email_verified then 5 else 0 end)::numeric, 2) as security_score
+            from password_vault.users u
+            order by security_score desc
+        """
+
+    r = conn.execute(text(sql))
     rows = r.fetchall()
     for row in rows:
         print(row)
