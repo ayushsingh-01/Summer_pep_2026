@@ -23,7 +23,102 @@ if dotenv_path.exists():
 
 
 st.set_page_config(page_title="Password Vault Analytics", layout="wide")
-st.title("Password Vault — Analytics Dashboard")
+st.markdown(
+    """
+    <style>
+        :root {
+            --pv-ink: #102A43;
+            --pv-teal: #2A9D8F;
+            --pv-coral: #E76F51;
+            --pv-gold: #E9C46A;
+            --pv-surface: rgba(255, 255, 255, 0.78);
+            --pv-border: rgba(16, 42, 67, 0.10);
+        }
+
+        .stApp {
+            background:
+                radial-gradient(circle at top left, rgba(42, 157, 143, 0.18), transparent 30%),
+                radial-gradient(circle at top right, rgba(231, 111, 81, 0.16), transparent 28%),
+                linear-gradient(180deg, #F7FAFC 0%, #EEF5FF 48%, #FBFCFF 100%);
+            color: var(--pv-ink);
+        }
+
+        [data-testid="stSidebar"] {
+            background: linear-gradient(180deg, rgba(16, 42, 67, 0.96), rgba(31, 68, 94, 0.96));
+            color: white;
+        }
+
+        [data-testid="stSidebar"] * {
+            color: white !important;
+        }
+
+        .pv-hero {
+            padding: 1.4rem 1.5rem;
+            border-radius: 24px;
+            background: linear-gradient(135deg, rgba(16,42,67,0.96), rgba(42,157,143,0.88));
+            color: white;
+            box-shadow: 0 18px 50px rgba(16, 42, 67, 0.18);
+            border: 1px solid rgba(255,255,255,0.16);
+            margin-bottom: 1.1rem;
+        }
+
+        .pv-hero h1 {
+            margin: 0;
+            font-size: 2.2rem;
+            letter-spacing: -0.03em;
+        }
+
+        .pv-hero p {
+            margin: 0.35rem 0 0;
+            font-size: 1rem;
+            opacity: 0.94;
+        }
+
+        .pv-pill {
+            display: inline-block;
+            padding: 0.3rem 0.7rem;
+            margin-right: 0.45rem;
+            margin-top: 0.45rem;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.14);
+            border: 1px solid rgba(255,255,255,0.16);
+            font-size: 0.78rem;
+            font-weight: 600;
+        }
+
+        .pv-panel {
+            background: var(--pv-surface);
+            backdrop-filter: blur(14px);
+            border: 1px solid var(--pv-border);
+            border-radius: 22px;
+            padding: 1rem 1.05rem;
+            box-shadow: 0 14px 35px rgba(16, 42, 67, 0.07);
+            margin-bottom: 1rem;
+        }
+
+        .pv-section-title {
+            font-weight: 700;
+            color: var(--pv-ink);
+            margin-bottom: 0.45rem;
+            letter-spacing: -0.02em;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <div class="pv-hero">
+        <h1>Password Vault</h1>
+        <p>Security analytics, saved credentials, and password generation in one interactive workspace.</p>
+        <span class="pv-pill">Analytics</span>
+        <span class="pv-pill">Credentials</span>
+        <span class="pv-pill">Password tools</span>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 def resolve_database_url() -> str:
@@ -785,9 +880,18 @@ if users_df.empty:
     st.warning("No users were found in this database. Initialize the schema and seed data first.")
     st.stop()
 
-analytics_tab, credentials_tab, password_tab = st.tabs(["Analytics", "Credentials", "Password"])
+st.sidebar.title("Workspace")
+st.sidebar.caption("Use the sidebar to move between sections.")
+page = st.sidebar.radio("Sections", ["Analytics", "Credentials", "Password"], index=0)
 
-with analytics_tab:
+st.sidebar.markdown("---")
+st.sidebar.markdown("### Quick Glance")
+st.sidebar.metric("Users", len(users_df))
+st.sidebar.metric("Database", os.getenv("POSTGRES_DB", "password_vault"))
+
+if page == "Analytics":
+    st.markdown('<div class="pv-panel">', unsafe_allow_html=True)
+    st.markdown('<div class="pv-section-title">Analytics</div>', unsafe_allow_html=True)
     selected = st.selectbox("View", list(QUERY_SPECS.keys()))
     st.markdown("---")
 
@@ -805,8 +909,11 @@ with analytics_tab:
             "`password_vault_sql/00_setup.sql` against the same database URL."
         )
         st.exception(e)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-with credentials_tab:
+elif page == "Credentials":
+    st.markdown('<div class="pv-panel">', unsafe_allow_html=True)
+    st.markdown('<div class="pv-section-title">Credentials</div>', unsafe_allow_html=True)
     st.subheader("Add or remove your own credentials")
     st.caption("Choose a user, then create or delete credentials in that user's vaults.")
 
@@ -1024,7 +1131,11 @@ with credentials_tab:
         st.markdown("#### Your credentials")
         st.dataframe(credentials_df, use_container_width=True, hide_index=True)
 
-with password_tab:
+    st.markdown('</div>', unsafe_allow_html=True)
+
+else:
+    st.markdown('<div class="pv-panel">', unsafe_allow_html=True)
+    st.markdown('<div class="pv-section-title">Password</div>', unsafe_allow_html=True)
     st.subheader("Password suggestion and strength checker")
     st.caption("Type a website name and the app suggests a password, shows its strength, and can save it as a credential.")
 
@@ -1123,3 +1234,5 @@ with password_tab:
                 if custom_password:
                     render_strength_meter(custom_password)
                     st.caption(f"Estimated strength: {local_strength_label(custom_password)}")
+
+    st.markdown('</div>', unsafe_allow_html=True)
