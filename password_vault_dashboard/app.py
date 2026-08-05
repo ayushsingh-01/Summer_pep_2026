@@ -1,6 +1,8 @@
 import os
 import hashlib
 import base64
+import secrets
+import string
 from pathlib import Path
 
 import pandas as pd
@@ -343,6 +345,56 @@ def load_credentials(_engine, user_id: int) -> pd.DataFrame:
         ORDER BY pe.created_at DESC, pe.password_entry_id DESC;
         """,
         {"user_id": user_id},
+    )
+
+
+def local_strength_label(password: str) -> str:
+    length_score = len(password)
+    class_score = 0
+
+    if any(ch.islower() for ch in password):
+        class_score += 1
+    if any(ch.isupper() for ch in password):
+        class_score += 1
+    if any(ch.isdigit() for ch in password):
+        class_score += 1
+    if any(ch in string.punctuation for ch in password):
+        class_score += 1
+
+    if length_score < 8 or class_score <= 1:
+        return "weak"
+    if length_score < 12 or class_score == 2:
+        return "medium"
+    if length_score < 16 or class_score == 3:
+        return "strong"
+    return "very_strong"
+
+
+def generate_password_suggestion(*, length: int, include_symbols: bool) -> str:
+    alphabet = string.ascii_letters + string.digits + (string.punctuation if include_symbols else "")
+    password_chars = [
+        secrets.choice(string.ascii_lowercase),
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.digits),
+    ]
+    if include_symbols:
+        password_chars.append(secrets.choice(string.punctuation))
+
+    while len(password_chars) < length:
+        password_chars.append(secrets.choice(alphabet))
+
+    secrets.SystemRandom().shuffle(password_chars)
+    return "".join(password_chars[:length])
+
+
+def render_strength_meter(password: str) -> None:
+    strength = local_strength_label(password)
+    score_map = {"weak": 25, "medium": 50, "strong": 75, "very_strong": 100}
+    color_map = {"weak": "#D1495B", "medium": "#E09F3E", "strong": "#2A9D8F", "very_strong": "#1D7874"}
+    st.progress(score_map[strength] / 100.0)
+    st.markdown(
+        f"<div style='font-weight:600;color:{color_map[strength]};text-transform:uppercase;'>{strength.replace('_', ' ')}</div>",
+        unsafe_allow_html=True,
     )
 
 
@@ -733,7 +785,7 @@ if users_df.empty:
     st.warning("No users were found in this database. Initialize the schema and seed data first.")
     st.stop()
 
-analytics_tab, credentials_tab = st.tabs(["Analytics", "Credentials"])
+analytics_tab, credentials_tab, password_tab = st.tabs(["Analytics", "Credentials", "Password"])
 
 with analytics_tab:
     selected = st.selectbox("View", list(QUERY_SPECS.keys()))
@@ -971,3 +1023,103 @@ with credentials_tab:
 
         st.markdown("#### Your credentials")
         st.dataframe(credentials_df, use_container_width=True, hide_index=True)
+
+with password_tab:
+    st.subheader("Password suggestion and strength checker")
+    st.caption("Type a website name and the app suggests a password, shows its strength, and can save it as a credential.")
+
+    password_user_label = st.selectbox(
+        "Credential owner",
+        list(user_labels.keys()),
+        key="password_owner_select",
+    )
+    password_user_id = user_labels[password_user_label]
+
+    password_vaults_df = load_vaults(engine, password_user_id)
+    password_categories_df = load_categories(engine)
+
+    if password_vaults_df.empty:
+        st.info("This user has no vaults yet. Create a vault before generating and saving credentials.")
+    else:
+        password_vault_labels = {
+            f"{row.vault_name} ({row.vault_type})": int(row.vault_id)
+            for row in password_vaults_df.itertuples(index=False)
+        }
+        password_category_options = ["(none)"] + [row.category_name for row in password_categories_df.itertuples(index=False)]
+
+        suggestion_col, action_col = st.columns([3, 1])
+        with suggestion_col:
+            suggestion_vault_label = st.selectbox("Vault", list(password_vault_labels.keys()))
+            suggestion_category_label = st.selectbox("Category", password_category_options)
+            suggestion_website_name = st.text_input("Website name")
+            suggestion_username = st.text_input("Username / email")
+            suggestion_length = st.slider("Password length", min_value=12, max_value=32, value=18)
+            suggestion_include_symbols = st.checkbox("Include symbols", value=True)
+
+        suggestion_key = (
+            f"password_suggestion_{password_user_id}_"
+            f"{suggestion_website_name.strip().lower()}_{suggestion_username.strip().lower()}_"
+            f"{suggestion_length}_{int(suggestion_include_symbols)}"
+        )
+
+        with action_col:
+            st.markdown("#### Suggested password")
+            if st.button("Refresh suggestion", use_container_width=True):
+                st.session_state.pop(suggestion_key, None)
+
+            if suggestion_website_name.strip():
+                if suggestion_key not in st.session_state:
+                    st.session_state[suggestion_key] = generate_password_suggestion(
+                        length=suggestion_length,
+                        include_symbols=suggestion_include_symbols,
+                    )
+
+                suggested_password = st.session_state[suggestion_key]
+                st.code(suggested_password, language="text")
+                render_strength_meter(suggested_password)
+
+                accept_suggestion = st.checkbox("I accept this password and want to save the credential", key=f"accept_password_suggestion_{suggestion_key}")
+                if accept_suggestion:
+                    password_url = st.text_input("URL for this credential", placeholder="https://example.com")
+                    password_notes = st.text_area("Notes", height=90)
+                    password_is_favorite = st.checkbox("Mark as favorite", key=f"password_suggestion_favorite_{suggestion_key}")
+                    expiry_toggle = st.checkbox("Set expiry date", key=f"password_suggestion_expiry_toggle_{suggestion_key}")
+                    expiry_date_value = st.date_input("Expiry date", disabled=not expiry_toggle, key=f"password_suggestion_expiry_date_{suggestion_key}")
+
+                    if st.button("Save suggested credential"):
+                        try:
+                            password_strength = local_strength_label(suggested_password)
+                            category_id = None
+                            if suggestion_category_label != "(none)":
+                                category_id = int(
+                                    password_categories_df.loc[
+                                        password_categories_df["category_name"] == suggestion_category_label, "category_id"
+                                    ].iloc[0]
+                                )
+
+                            inserted_id = save_credential(
+                                engine,
+                                vault_id=password_vault_labels[suggestion_vault_label],
+                                category_id=category_id,
+                                created_by_user_id=password_user_id,
+                                website_name=suggestion_website_name.strip(),
+                                username=suggestion_username.strip(),
+                                password=suggested_password,
+                                url=password_url.strip() or None,
+                                notes=password_notes.strip() or None,
+                                password_strength=password_strength,
+                                expires_at=pd.Timestamp(expiry_date_value).to_pydatetime() if expiry_toggle else None,
+                                is_favorite=password_is_favorite,
+                            )
+                            fetch_dataframe.clear()
+                            run_query.clear()
+                            st.success(f"Suggested credential saved with ID {inserted_id}.")
+                            st.rerun()
+                        except Exception as e:
+                            st.exception(e)
+
+                st.markdown("#### Password checker")
+                custom_password = st.text_input("Test a password", type="password", key="password_strength_tester")
+                if custom_password:
+                    render_strength_meter(custom_password)
+                    st.caption(f"Estimated strength: {local_strength_label(custom_password)}")
