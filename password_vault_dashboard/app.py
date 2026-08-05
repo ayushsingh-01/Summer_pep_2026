@@ -14,6 +14,9 @@ from sqlalchemy import text
 
 from utils.db import get_engine
 
+px.defaults.template = "plotly_white"
+px.defaults.color_discrete_sequence = ["#2A9D8F", "#457B9D", "#E76F51", "#E9C46A", "#264653", "#A8DADC"]
+
 
 # Load .env from repo root if present
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,24 +30,24 @@ st.markdown(
     """
     <style>
         :root {
-            --pv-ink: #102A43;
+            --pv-ink: #163047;
             --pv-teal: #2A9D8F;
             --pv-coral: #E76F51;
             --pv-gold: #E9C46A;
-            --pv-surface: rgba(255, 255, 255, 0.78);
-            --pv-border: rgba(16, 42, 67, 0.10);
+            --pv-surface: rgba(255, 255, 255, 0.88);
+            --pv-border: rgba(22, 48, 71, 0.10);
         }
 
         .stApp {
             background:
-                radial-gradient(circle at top left, rgba(42, 157, 143, 0.18), transparent 30%),
-                radial-gradient(circle at top right, rgba(231, 111, 81, 0.16), transparent 28%),
-                linear-gradient(180deg, #F7FAFC 0%, #EEF5FF 48%, #FBFCFF 100%);
+                radial-gradient(circle at top left, rgba(42, 157, 143, 0.14), transparent 28%),
+                radial-gradient(circle at top right, rgba(231, 111, 81, 0.11), transparent 26%),
+                linear-gradient(180deg, #F8FBFD 0%, #F3F7FB 48%, #FCF9F4 100%);
             color: var(--pv-ink);
         }
 
         [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, rgba(16, 42, 67, 0.96), rgba(31, 68, 94, 0.96));
+            background: linear-gradient(180deg, rgba(21, 46, 65, 0.96), rgba(40, 73, 86, 0.96));
             color: white;
         }
 
@@ -55,7 +58,7 @@ st.markdown(
         .pv-hero {
             padding: 1.4rem 1.5rem;
             border-radius: 24px;
-            background: linear-gradient(135deg, rgba(16,42,67,0.96), rgba(42,157,143,0.88));
+            background: linear-gradient(135deg, rgba(21,46,65,0.96), rgba(42,157,143,0.86));
             color: white;
             box-shadow: 0 18px 50px rgba(16, 42, 67, 0.18);
             border: 1px solid rgba(255,255,255,0.16);
@@ -92,8 +95,15 @@ st.markdown(
             border: 1px solid var(--pv-border);
             border-radius: 22px;
             padding: 1rem 1.05rem;
-            box-shadow: 0 14px 35px rgba(16, 42, 67, 0.07);
+            box-shadow: 0 14px 35px rgba(22, 48, 71, 0.07);
             margin-bottom: 1rem;
+        }
+
+        .pv-panel .stSelectbox label,
+        .pv-panel .stTextInput label,
+        .pv-panel .stTextArea label,
+        .pv-panel .stSlider label {
+            color: var(--pv-ink) !important;
         }
 
         .pv-section-title {
@@ -101,6 +111,19 @@ st.markdown(
             color: var(--pv-ink);
             margin-bottom: 0.45rem;
             letter-spacing: -0.02em;
+        }
+
+        div[data-testid="stMetric"] {
+            background: rgba(255, 255, 255, 0.84);
+            border: 1px solid rgba(22, 48, 71, 0.09);
+            padding: 0.75rem 0.9rem;
+            border-radius: 18px;
+            box-shadow: 0 10px 24px rgba(22, 48, 71, 0.05);
+        }
+
+        .stSelectbox, .stTextInput, .stTextArea, .stSlider {
+            background: rgba(255,255,255,0.68);
+            border-radius: 16px;
         }
     </style>
     """,
