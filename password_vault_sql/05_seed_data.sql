@@ -164,12 +164,12 @@ WITH login_specs AS (
     SELECT *
     FROM (
         VALUES
-            ('john_doe', 'fp::john-win', '10.0.0.10', 'Chrome', NOW() - INTERVAL '1 day 2 hours', NOW() - INTERVAL '1 day 1 hour', 'success', NULL),
-            ('john_doe', 'fp::john-android', '10.0.0.14', 'Chrome Mobile', NOW() - INTERVAL '4 hours', NULL, 'failure', 'Invalid password'),
-            ('john_doe', 'fp::john-android', '10.0.0.14', 'Chrome Mobile', NOW() - INTERVAL '3 hours 50 minutes', NULL, 'failure', 'Invalid password'),
-            ('john_doe', 'fp::john-android', '10.0.0.14', 'Chrome Mobile', NOW() - INTERVAL '3 hours 45 minutes', NULL, 'failure', 'Invalid password'),
-            ('alice_w', 'fp::alice-mac', '10.0.0.20', 'Safari', NOW() - INTERVAL '3 hours', NULL, 'success', NULL),
-            ('bob_admin', 'fp::bob-linux', '10.0.0.30', 'Firefox', NOW() - INTERVAL '2 hours', NULL, 'success', NULL)
+            ('john_doe', 'fp::john-win', '10.0.0.10'::inet, 'Chrome', NOW() - INTERVAL '1 day 2 hours', NOW() - INTERVAL '1 day 1 hour', 'success', NULL),
+            ('john_doe', 'fp::john-android', '10.0.0.14'::inet, 'Chrome Mobile', NOW() - INTERVAL '4 hours', NULL, 'failure', 'Invalid password'),
+            ('john_doe', 'fp::john-android', '10.0.0.14'::inet, 'Chrome Mobile', NOW() - INTERVAL '3 hours 50 minutes', NULL, 'failure', 'Invalid password'),
+            ('john_doe', 'fp::john-android', '10.0.0.14'::inet, 'Chrome Mobile', NOW() - INTERVAL '3 hours 45 minutes', NULL, 'failure', 'Invalid password'),
+            ('alice_w', 'fp::alice-mac', '10.0.0.20'::inet, 'Safari', NOW() - INTERVAL '3 hours', NULL, 'success', NULL),
+            ('bob_admin', 'fp::bob-linux', '10.0.0.30'::inet, 'Firefox', NOW() - INTERVAL '2 hours', NULL, 'success', NULL)
     ) AS l(username, device_fingerprint, ip_address, browser_name, login_time, logout_time, login_status, failure_reason)
 )
 INSERT INTO login_sessions (
@@ -200,8 +200,8 @@ WITH share_specs AS (
     SELECT *
     FROM (
         VALUES
-            ('john_doe', 'alice_w', 'read_only', NOW() - INTERVAL '5 days', NOW() + INTERVAL '10 days', NULL),
-            ('alice_w', 'john_doe', 'temporary', NOW() - INTERVAL '2 days', NOW() + INTERVAL '2 days', NULL)
+            ('john_doe', 'alice_w', 'read_only', NOW() - INTERVAL '5 days', NOW() + INTERVAL '10 days', NULL::timestamptz),
+            ('alice_w', 'john_doe', 'temporary', NOW() - INTERVAL '2 days', NOW() + INTERVAL '2 days', NULL::timestamptz)
     ) AS s(shared_by_username, shared_with_username, access_level, shared_at, expires_at, revoked_at)
 )
 INSERT INTO shared_passwords (
