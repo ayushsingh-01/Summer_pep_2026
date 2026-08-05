@@ -31,8 +31,10 @@ def get_conn_params():
 
 
 @st.cache_data(ttl=60)
-def run_query(engine, sql: str) -> pd.DataFrame:
-    return pd.read_sql(sql, engine)
+def run_query(_engine, sql: str) -> pd.DataFrame:
+    """Run SQL and return a DataFrame. Prefix engine param with underscore
+    so Streamlit does not attempt to hash the SQLAlchemy Engine object."""
+    return pd.read_sql(sql, _engine)
 
 
 params = get_conn_params()
