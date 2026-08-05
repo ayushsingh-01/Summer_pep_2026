@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+password_vault_dashboard/__pycache__/
+password_vault_dashboard/utils/__pycache__/
+.pytest_cache/

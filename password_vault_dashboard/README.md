@@ -1,23 +1,48 @@
 # Password Vault — Analytics Dashboard
 
-Minimal Streamlit dashboard that connects to the local Postgres instance created by the SQL project.
+Streamlit dashboard that auto-connects to Postgres using `DATABASE_URL` first, then falls back to `POSTGRES_*` variables from `.env`.
 
-Prerequisites
-- Docker Compose up for the database (see repository root `docker-compose.yml`).
-- Python 3.10+ and pip.
+## What changed
 
-Setup
+- No more manual Connect button.
+- The app connects as soon as it starts.
+- It works with a hosted Postgres instance once you set the environment variables.
+
+## Setup
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate   # or `.venv\Scripts\activate` on Windows
+.venv\Scripts\activate
 pip install -r password_vault_dashboard/requirements.txt
 ```
 
-Run
+## Configure the database
+
+Use one of these options:
+
+```bash
+# Option 1: one hosted database URL
+DATABASE_URL=postgresql+psycopg2://USER:PASSWORD@HOST:PORT/DBNAME
+
+# Option 2: separate variables
+POSTGRES_HOST=127.0.0.1
+POSTGRES_PORT=55432
+POSTGRES_USER=pguser
+POSTGRES_PASSWORD=pgpass
+POSTGRES_DB=password_vault
+```
+
+For an online database, create a hosted Postgres instance on a service like Neon, Supabase, or Render, then paste its connection string into `DATABASE_URL`.
+
+## Run
 
 ```bash
 streamlit run password_vault_dashboard/app.py
 ```
 
-By default the app will load DB connection values from the repository `.env` file. You can also enter connection details in the sidebar.
+## After you write the code
+
+1. Put your hosted DB connection string in `.env` as `DATABASE_URL`, or keep the `POSTGRES_*` settings.
+2. Start the app with the command above.
+3. If you change the database, restart Streamlit so it reloads the env vars.
+4. If you want to deploy online, move the app to Streamlit Community Cloud or another host and set the same env vars there.

@@ -2,8 +2,8 @@ import os
 from pathlib import Path
 
 import pandas as pd
-import streamlit as st
 import plotly.express as px
+import streamlit as st
 from dotenv import load_dotenv
 
 from utils.db import get_engine
@@ -20,14 +20,18 @@ st.set_page_config(page_title="Password Vault Analytics", layout="wide")
 st.title("Password Vault — Analytics Dashboard")
 
 
-def get_conn_params():
-    return {
-        "host": st.sidebar.text_input("Host", os.getenv("POSTGRES_HOST", "localhost")),
-        "port": st.sidebar.text_input("Port", os.getenv("POSTGRES_PORT", "5432")),
-        "user": st.sidebar.text_input("User", os.getenv("POSTGRES_USER", "pguser")),
-        "password": st.sidebar.text_input("Password", os.getenv("POSTGRES_PASSWORD", ""), type="password"),
-        "db": st.sidebar.text_input("Database", os.getenv("POSTGRES_DB", "password_vault")),
-    }
+def resolve_database_url() -> str:
+    """Prefer a single hosted DATABASE_URL, then fall back to separate Postgres env vars."""
+    direct_url = os.getenv("DATABASE_URL", "").strip()
+    if direct_url:
+        return direct_url
+
+    user = os.getenv("POSTGRES_USER", "pguser")
+    password = os.getenv("POSTGRES_PASSWORD", "pgpass")
+    host = os.getenv("POSTGRES_HOST", "127.0.0.1")
+    port = os.getenv("POSTGRES_PORT", "55432")
+    database = os.getenv("POSTGRES_DB", "password_vault")
+    return f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
 
 
 @st.cache_data(ttl=60)
@@ -37,16 +41,25 @@ def run_query(_engine, sql: str) -> pd.DataFrame:
     return pd.read_sql(sql, _engine)
 
 
-params = get_conn_params()
-connect = st.sidebar.button("Connect")
+@st.cache_resource
+def get_engine_cached(database_url: str):
+    return get_engine(database_url)
 
-engine = None
-if connect:
-    try:
-        engine = get_engine(params["user"], params["password"], params["host"], params["port"], params["db"])
-        st.sidebar.success("Connected (engine created).")
-    except Exception as e:
-        st.sidebar.error(f"Connection failed: {e}")
+
+database_url = resolve_database_url()
+
+st.sidebar.header("Connection")
+st.sidebar.caption("The dashboard connects automatically from `DATABASE_URL` or the `POSTGRES_*` variables in `.env`.")
+st.sidebar.code(database_url.replace(os.getenv("POSTGRES_PASSWORD", "pgpass"), "***"), language="text")
+
+try:
+    engine = get_engine_cached(database_url)
+    with engine.connect() as connection:
+        connection.exec_driver_sql("SELECT 1")
+    st.sidebar.success("Connected")
+except Exception as e:
+    st.sidebar.error(f"Connection failed: {e}")
+    st.stop()
 
 
 QUERIES = {
@@ -61,22 +74,18 @@ QUERIES = {
 selected = st.selectbox("View", list(QUERIES.keys()))
 st.markdown("---")
 
-if engine is None:
-    st.info("Click 'Connect' in the sidebar to create a DB connection (or set env vars in .env).")
-else:
-    sql = QUERIES[selected]
-    try:
-        df = run_query(engine, sql)
-        st.write(df)
+sql = QUERIES[selected]
+try:
+    df = run_query(engine, sql)
+    st.write(df)
 
-        if selected == "User Security Summary":
-            fig = px.bar(df, x="username", y="security_score", color="username", text="security_score")
-            st.plotly_chart(fig, use_container_width=True)
+    if selected == "User Security Summary":
+        fig = px.bar(df, x="username", y="security_score", color="username", text="security_score")
+        st.plotly_chart(fig, use_container_width=True)
 
-        if selected == "Password Health":
-            if "risk_score" in df.columns:
-                fig = px.histogram(df, x="risk_score", nbins=20, title="Password risk score distribution")
-                st.plotly_chart(fig, use_container_width=True)
+    if selected == "Password Health" and "risk_score" in df.columns:
+        fig = px.histogram(df, x="risk_score", nbins=20, title="Password risk score distribution")
+        st.plotly_chart(fig, use_container_width=True)
 
-    except Exception as e:
-        st.error(f"Query failed: {e}")
+except Exception as e:
+    st.error(f"Query failed: {e}")
