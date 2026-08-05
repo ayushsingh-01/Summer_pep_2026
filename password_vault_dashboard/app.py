@@ -73,6 +73,37 @@ def get_fernet_key() -> Fernet | None:
     return Fernet(key.encode("utf-8"))
 
 
+def _build_fernet_from_seed(seed: str) -> Fernet:
+    key = base64.urlsafe_b64encode(hashlib.sha256(seed.encode("utf-8")).digest()).decode("utf-8")
+    return Fernet(key.encode("utf-8"))
+
+
+def get_decryption_candidates() -> list[Fernet]:
+    candidates: list[Fernet] = []
+
+    explicit_key = os.getenv("APP_ENCRYPTION_KEY", "").strip()
+    if explicit_key:
+        candidates.append(Fernet(explicit_key.encode("utf-8")))
+
+    candidates.append(_build_fernet_from_seed(resolve_database_url()))
+
+    legacy_seed = (
+        f"postgresql+psycopg2://{os.getenv('POSTGRES_USER', 'pguser')}:{os.getenv('POSTGRES_PASSWORD', 'pgpass')}"
+        f"@{os.getenv('POSTGRES_HOST', '127.0.0.1')}:{os.getenv('POSTGRES_PORT', '55432')}/{os.getenv('POSTGRES_DB', 'password_vault')}"
+    )
+    candidates.append(_build_fernet_from_seed(legacy_seed))
+
+    deduped: list[Fernet] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        token = candidate._signing_key + candidate._encryption_key
+        token_id = token.hex()
+        if token_id not in seen:
+            seen.add(token_id)
+            deduped.append(candidate)
+    return deduped
+
+
 def encrypt_credential(plain_text: str) -> tuple[str, str]:
     fernet = get_fernet_key()
     if fernet is None:
@@ -84,11 +115,19 @@ def encrypt_credential(plain_text: str) -> tuple[str, str]:
 
 
 def decrypt_credential(encrypted_text: str) -> str:
-    fernet = get_fernet_key()
-    if fernet is None:
-        raise ValueError("Set APP_ENCRYPTION_KEY in your .env before viewing credentials.")
+    token = encrypted_text.encode("utf-8")
+    last_error: Exception | None = None
 
-    return fernet.decrypt(encrypted_text.encode("utf-8")).decode("utf-8")
+    for fernet in get_decryption_candidates():
+        try:
+            return fernet.decrypt(token).decode("utf-8")
+        except InvalidToken as exc:
+            last_error = exc
+
+    if last_error is not None:
+        raise InvalidToken("Unable to decrypt credential with any available key.") from last_error
+
+    raise InvalidToken("Unable to decrypt credential with any available key.")
 
 
 def save_credential(
